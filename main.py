@@ -12,7 +12,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Replace with your actual test server ID (Developer Mode > right-click server > Copy Server ID)
+# Replace with your actual test server ID in .env (Developer Mode > right-click server > Copy Server ID)
 TEST_GUILD_ID = os.getenv("TEST_GUILD_ID")
 
 
