@@ -34,7 +34,7 @@ async def on_ready():
     except Exception as e:  # noqa: BLE001
         print(f"Failed to sync commands: {e}")
 
-
+# Check to see if bot is active
 @bot.tree.command(name="ping", description="Check if the bot is responsive")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong! The IPC systems are online.")
