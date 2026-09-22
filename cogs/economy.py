@@ -231,3 +231,64 @@ class Economy(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Economy(bot))
+
+
+def time_until_ready(last_claim, cooldown, now):
+    """Returns the remaining timedelta if still on cooldown, or None if ready to claim."""
+    if last_claim is None:
+        return None
+    elapsed = now - last_claim
+    if elapsed >= cooldown:
+        return None
+    return cooldown - elapsed
+
+
+def format_remaining(remaining: timedelta) -> str:
+    """Formats a timedelta as a human-readable string like '1d 3h 12m'."""
+    days, rem = divmod(int(remaining.total_seconds()), 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    parts.append(f"{minutes}m")
+    return " ".join(parts)
+
+
+async def claim_reward(
+    self,
+    user_id: int,
+    column: str,
+    cooldown: timedelta,
+    reward_min: int,
+    reward_max: int,
+):
+    """Generic cooldown-based reward claim. Returns (success, message, new_balance_or_None)."""
+    await self.get_or_create_user(user_id)
+
+    async with self.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"SELECT {column} FROM users WHERE user_id = $1", user_id
+        )
+        last_claim = row[column]
+        now = datetime.now(tz=datetime.timezone.utc)
+
+        remaining = time_until_ready(last_claim, cooldown, now)
+        if remaining is not None:
+            return False, format_remaining(remaining), None
+
+        reward = random.randint(reward_min, reward_max)
+        new_balance = await conn.fetchval(
+            f"""
+            UPDATE users
+            SET balance = balance + $1, {column} = $2
+            WHERE user_id = $3
+            RETURNING balance
+            """,
+            reward,
+            now,
+            user_id,
+        )
+        return True, reward, new_balance
