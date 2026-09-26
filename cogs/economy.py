@@ -66,7 +66,7 @@ class Economy(commands.Cog):
                 f"SELECT {column} FROM users WHERE user_id = $1", user_id
             )
             last_claim = row[column]
-            now = datetime.utcnow()
+            now = datetime.utcnow()  # noqa: DTZ003
 
             remaining = time_until_ready(last_claim, cooldown, now)
             if remaining is not None:

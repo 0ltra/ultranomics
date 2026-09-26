@@ -40,7 +40,7 @@ class UltranomicsBot(commands.Bot):
             self.tree.copy_global_to(guild=guild)
             synced = await self.tree.sync(guild=guild)
             logger.info(f"Synced {len(synced)} command(s)")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to sync commands: {e}")
 
     async def close(self):
