@@ -1,24 +1,42 @@
-import os
 import random
 from datetime import datetime, timedelta
 
-import asyncpg
 import discord
 from discord import app_commands
 from discord.ext import commands
 
 
+def time_until_ready(last_claim, cooldown, now):
+    """Returns the remaining timedelta if still on cooldown, or None if ready to claim."""
+    if last_claim is None:
+        return None
+    elapsed = now - last_claim
+    if elapsed >= cooldown:
+        return None
+    return cooldown - elapsed
+
+
+def format_remaining(remaining: timedelta) -> str:
+    """Formats a timedelta as a human-readable string like '1d 3h 12m'."""
+    days, rem = divmod(int(remaining.total_seconds()), 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    parts.append(f"{minutes}m")
+    return " ".join(parts)
+
+
 class Economy(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.pool = None
 
-    async def cog_load(self):
-        self.pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"))
-
-    async def cog_unload(self):
-        if self.pool:
-            await self.pool.close()
+    @property
+    def pool(self):
+        return self.bot.pool
 
     async def get_or_create_user(self, user_id: int):
         async with self.pool.acquire() as conn:
@@ -47,26 +65,12 @@ class Economy(commands.Cog):
             row = await conn.fetchrow(
                 f"SELECT {column} FROM users WHERE user_id = $1", user_id
             )
-            if row is None:
-                return False, "User not found", None
-
             last_claim = row[column]
-            now = datetime.utcnow()  # noqa: DTZ003
+            now = datetime.utcnow()
 
-            if last_claim is not None:
-                elapsed = now - last_claim
-                if elapsed < cooldown:
-                    remaining = cooldown - elapsed
-                    days, rem = divmod(int(remaining.total_seconds()), 86400)
-                    hours, rem = divmod(rem, 3600)
-                    minutes = rem // 60
-                    parts = []
-                    if days:
-                        parts.append(f"{days}d")
-                    if hours:
-                        parts.append(f"{hours}h")
-                    parts.append(f"{minutes}m")
-                    return False, " ".join(parts), None
+            remaining = time_until_ready(last_claim, cooldown, now)
+            if remaining is not None:
+                return False, format_remaining(remaining), None
 
             reward = random.randint(reward_min, reward_max)
             new_balance = await conn.fetchval(
@@ -82,7 +86,6 @@ class Economy(commands.Cog):
             )
             return True, reward, new_balance
 
-    # Check Balances
     @app_commands.command(name="balance", description="Check your IPC credit balance")
     async def balance(self, interaction: discord.Interaction):
         bal = await self.get_or_create_user(interaction.user.id)
@@ -103,22 +106,6 @@ class Economy(commands.Cog):
             return
         await interaction.response.send_message(
             f"💰 The IPC has deposited **{result}** credits into your account. "
-            f"New balance: **{new_balance}**."
-        )
-
-    @app_commands.command(name="weekly", description="Claim your weekly IPC dividend")
-    async def weekly(self, interaction: discord.Interaction):
-        success, result, new_balance = await self.claim_reward(
-            interaction.user.id, "last_weekly", timedelta(days=7), 500, 800
-        )
-        if not success:
-            await interaction.response.send_message(
-                f"⏳ Dividends already claimed this cycle. Try again in {result}.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_message(
-            f"📈 Your IPC stock dividend has paid out **{result}** credits. "
             f"New balance: **{new_balance}**."
         )
 
@@ -143,7 +130,23 @@ class Economy(commands.Cog):
             ]
         )
         await interaction.response.send_message(
-            f"🧧 You {flavor} and earned **{result}** credits. "
+            f"🧳 You {flavor} and earned **{result}** credits. "
+            f"New balance: **{new_balance}**."
+        )
+
+    @app_commands.command(name="weekly", description="Claim your weekly IPC dividend")
+    async def weekly(self, interaction: discord.Interaction):
+        success, result, new_balance = await self.claim_reward(
+            interaction.user.id, "last_weekly", timedelta(days=7), 500, 800
+        )
+        if not success:
+            await interaction.response.send_message(
+                f"⏳ Dividends already claimed this cycle. Try again in {result}.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            f"📈 Your IPC stock dividend has paid out **{result}** credits. "
             f"New balance: **{new_balance}**."
         )
 
@@ -200,7 +203,6 @@ class Economy(commands.Cog):
             f"✅ Sent **{amount}** credits to {user.mention}."
         )
 
-    # Leaderboard command
     @app_commands.command(name="leaderboard", description="View the top IPC investors")
     async def leaderboard(self, interaction: discord.Interaction):
         async with self.pool.acquire() as conn:
@@ -231,64 +233,3 @@ class Economy(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Economy(bot))
-
-
-def time_until_ready(last_claim, cooldown, now):
-    """Returns the remaining timedelta if still on cooldown, or None if ready to claim."""
-    if last_claim is None:
-        return None
-    elapsed = now - last_claim
-    if elapsed >= cooldown:
-        return None
-    return cooldown - elapsed
-
-
-def format_remaining(remaining: timedelta) -> str:
-    """Formats a timedelta as a human-readable string like '1d 3h 12m'."""
-    days, rem = divmod(int(remaining.total_seconds()), 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes = rem // 60
-    parts = []
-    if days:
-        parts.append(f"{days}d")
-    if hours:
-        parts.append(f"{hours}h")
-    parts.append(f"{minutes}m")
-    return " ".join(parts)
-
-
-async def claim_reward(
-    self,
-    user_id: int,
-    column: str,
-    cooldown: timedelta,
-    reward_min: int,
-    reward_max: int,
-):
-    """Generic cooldown-based reward claim. Returns (success, message, new_balance_or_None)."""
-    await self.get_or_create_user(user_id)
-
-    async with self.pool.acquire() as conn:
-        row = await conn.fetchrow(
-            f"SELECT {column} FROM users WHERE user_id = $1", user_id
-        )
-        last_claim = row[column]
-        now = datetime.now(tz=datetime.timezone.utc)
-
-        remaining = time_until_ready(last_claim, cooldown, now)
-        if remaining is not None:
-            return False, format_remaining(remaining), None
-
-        reward = random.randint(reward_min, reward_max)
-        new_balance = await conn.fetchval(
-            f"""
-            UPDATE users
-            SET balance = balance + $1, {column} = $2
-            WHERE user_id = $3
-            RETURNING balance
-            """,
-            reward,
-            now,
-            user_id,
-        )
-        return True, reward, new_balance
