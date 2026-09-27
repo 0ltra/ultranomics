@@ -1,4 +1,4 @@
-# Ultranomics [Renamed]
+# Ultranomics
 
 A Discord economy bot
 
