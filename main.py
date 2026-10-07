@@ -3,6 +3,7 @@ import os
 
 import asyncpg
 import discord
+import redis.asyncio as redis
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -10,6 +11,7 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 TEST_GUILD_ID = os.getenv("TEST_GUILD_ID")
+REDIS_URL = os.getenv("REDIS_URL")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,10 +27,18 @@ class UltranomicsBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
         self.pool = None
+        self.redis = None
 
     async def setup_hook(self):
         self.pool = await asyncpg.create_pool(DATABASE_URL)
         logger.info("Database connection pool created")
+
+        self.redis = redis.from_url(REDIS_URL, decode_responses=True)
+        try:
+            await self.redis.ping()
+            logger.info("Connected to Redis")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Could not connect to Redis: {e}")
 
         for filename in os.listdir("./cogs"):
             if filename.endswith(".py") and filename != "__init__.py":
@@ -43,10 +53,14 @@ class UltranomicsBot(commands.Bot):
         except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to sync commands: {e}")
 
+    @discord.utils.copy_doc(discord.Client.close)
     async def close(self):
         if self.pool:
             await self.pool.close()
             logger.info("Database connection pool closed")
+        if self.redis:
+            await self.redis.close()
+            logger.info("Redis connection closed")
         await super().close()
 
 

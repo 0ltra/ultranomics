@@ -38,6 +38,10 @@ class Economy(commands.Cog):
     def pool(self):
         return self.bot.pool
 
+    @property
+    def redis(self):
+        return self.bot.redis
+
     async def get_or_create_user(self, user_id: int):
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -86,6 +90,45 @@ class Economy(commands.Cog):
             )
             return True, reward, new_balance
 
+    async def claim_reward_redis(
+        self,
+        user_id: int,
+        key_prefix: str,
+        cooldown_seconds: int,
+        reward_min: int,
+        reward_max: int,
+    ):
+        """Generic cooldown-based reward claim using a Redis key with TTL as the cooldown lock.
+
+        Returns (success, message, new_balance_or_None).
+        On success, the Redis key is set with an expiry equal to the cooldown — once it
+        expires, the user is automatically eligible again with no manual timestamp math.
+        """
+        await self.get_or_create_user(user_id)
+        redis_key = f"{key_prefix}:{user_id}"
+
+        try:
+            ttl = await self.redis.ttl(redis_key)
+        except Exception as e:
+            raise RuntimeError(f"Could not reach Redis for cooldown check: {e}") from e
+
+        if ttl and ttl > 0:
+            remaining = format_remaining(timedelta(seconds=ttl))
+            return False, remaining, None
+
+        reward = random.randint(reward_min, reward_max)
+
+        async with self.pool.acquire() as conn:
+            new_balance = await conn.fetchval(
+                "UPDATE users SET balance = balance + $1 WHERE user_id = $2 RETURNING balance",
+                reward,
+                user_id,
+            )
+
+        await self.redis.set(redis_key, "1", ex=cooldown_seconds)
+
+        return True, reward, new_balance
+
     @app_commands.command(name="balance", description="Check your IPC credit balance")
     async def balance(self, interaction: discord.Interaction):
         bal = await self.get_or_create_user(interaction.user.id)
@@ -111,8 +154,8 @@ class Economy(commands.Cog):
 
     @app_commands.command(name="work", description="Do a job for the IPC")
     async def work(self, interaction: discord.Interaction):
-        success, result, new_balance = await self.claim_reward(
-            interaction.user.id, "last_work", timedelta(hours=1), 20, 50
+        success, result, new_balance = await self.claim_reward_redis(
+            interaction.user.id, "cooldown:work", 3600, 20, 50
         )
         if not success:
             await interaction.response.send_message(
